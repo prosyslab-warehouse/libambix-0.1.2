@@ -1,0 +1,544 @@
+/* libambix.incl -  Documentation for AMBIsonics eXchange Library         -*- c -*-
+
+   Copyright © 2012 IOhannes m zmölnig <zmoelnig@iem.at>.
+         Institute of Electronic Music and Acoustics (IEM),
+         University of Music and Dramatic Arts, Graz
+
+   This file is part of libambix
+
+   libambix is free software; you can redistribute it and/or modify
+   it under the terms of the GNU Lesser General Public License as
+   published by the Free Software Foundation; either version 2.1 of
+   the License, or (at your option) any later version.
+
+   libambix is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU Lesser General Public License for more details.
+
+   You should have received a copy of the GNU Lesser General Public
+   License along with this program; if not, see <http://www.gnu.org/licenses/>.
+*/
+
+/**
+ * @mainpage AMBIX - the AMBIsonics eXchange library
+ *
+ * @section intro_sec Introduction
+ *
+ * libambix is a library that allows you to read and write AMBIX-files.
+ * It is strongly modelled after libsndfile, which it uses as a backend
+ *
+ *
+ * @section usage_sec Usage
+ *
+ * libambix provides a (hopefully easy to use) C-interface. Basically you open a
+ * file using ambix_open(), read audio data using @ref ambix_readf or write
+ * audio data using @ref ambix_writef and call ambix_close() once you are done.
+ *
+ * For a more detailed documentation, see the @link usage Usage page. @endlink
+ *
+ * @section format_sec Format
+ *
+ * For a shortish specification of the ambix format see the @link format Format
+ * page. @endlink
+ */
+
+/**
+ * @page usage Usage
+ *
+ * @section read_usage Reading ambix files
+ *
+ * When opening a file for read, the ambix_info_t struct should be set to 0. On
+ * successful open, all fields are filled by the library. If the open fails,
+ * the state of the ambix_info_t fields is undefined.
+ *
+ * The only exception to this is, if you want to force the ambix file to be read
+ * as either "BASIC" or "EXTENDED", e.g. because you don't want to care about
+ * adaptor matrices or because you do. In this case you must set the fileformat
+ * field the requested format.
+ *
+ *
+ *
+ * @subsection readbasic_usage Reading BASIC ambix files
+ *
+ * You can read any ambix file as "BASIC" by setting the 'fileformat' member of
+ * the ambix_info_t struct to @ref AMBIX_BASIC prior to opening the file.
+ * This will automatically do any conversion needed, by pre-multiplying the raw
+ * ambisonics data with an embedded adaptor matrix.
+ *
+ * Real "BASIC" files lack extra audio channels.
+ * However, when opening a file that is not a "BASIC" ambix file (e.g. an
+ * "EXTENDED" ambix file) as a "BASIC" one, by forcing the 'fileformat' member
+ * to '@ref AMBIX_BASIC', extra channels might be readable.
+ *
+ * @code
+   ambix_t*ambix = NULL;
+   ambix_info_t*info  = calloc(1, sizeof(ambix_info_t));
+
+   ambix->fileformat = AMBIX_BASIC;
+
+   ambix = ambix_open("ambixfile.caf", AMBIX_READ, info);
+   if(ambix) {
+     uint64_t frames = info->frames;
+     uint64_t blocksize = 1024;
+
+     float32_t*ambidata  = calloc(info->ambichannels  * blocksize, sizeof(float32_t));
+     float32_t*extradata = calloc(info->extrachannels * blocksize, sizeof(float32_t));
+
+     while(frames>blocksize) {
+       uint64_t blocks = ambix_readf_float32(ambix, ambidata, extradata, blocksize);
+
+       // process blocks frames of interleaved ambidata and interleaved extradata
+       // ...
+
+       frames-=blocks;
+     }
+
+     ambix_readf_float32(ambix, ambidata, extradata, frames);
+
+     // process last block of interleaved ambidata and interleaved extradata
+     // ...
+
+     ambix_close(ambix);
+     free(ambidata);
+     free(extradata);
+   }
+   free(info);
+ * @endcode
+ *
+ *
+ *
+ * @subsection readextended_usage Reading EXTENDED ambix files
+ *
+ * You can read an ambix file as "EXTENDED" by setting the 'fileformat' member
+ * of the ambix_info_t struct to @ref AMBIX_EXTENDED prior to opening the file. You
+ * will then have to retrieve the adaptor matrix from the file, in order to be
+ * able to reconstruct the full ambisonics set. You can also analyze the matrix
+ * to make educated guesses about the original channel layout.
+ *
+ * @code
+   ambix_t*ambix = NULL;
+   ambix_info_t*info  = calloc(1, sizeof(ambix_info_t));
+
+   /* setting the fileformat to AMBIX_EXTENDED forces the ambi data
+    * be delivered as stored in the file
+    */
+   ambix->fileformat = AMBIX_EXTENDED;
+
+   ambix = ambix_open("ambixfile.caf", AMBIX_READ, info);
+   if(ambix) {
+     uint64_t frames = info->frames;
+     uint64_t blocksize = 1024;
+
+     float32_t*ambidata  = calloc(info->ambichannels  * blocksize, sizeof(float32_t));
+     float32_t*extradata = calloc(info->extrachannels * blocksize, sizeof(float32_t));
+
+     const ambix_matrix_t*adaptormatrix=ambix_get_adaptormatrix(ambix);
+
+     while(frames>blocksize) {
+       uint64_t blocks = ambix_readf_float32(ambix, ambidata, extradata, blocksize);
+
+       // process blocks frames of interleaved ambidata and interleaved extradata,
+       // using the adaptormatrix
+       // ...
+
+       frames-=blocks;
+     }
+
+     ambix_readf_float32(ambix, ambidata, extradata, frames);
+
+     // process last block of interleaved ambidata and interleaved extradata
+     // using the adaptormatrix
+     // ...
+
+     ambix_close(ambix);
+     free(ambidata);
+     free(extradata);
+   }
+   free(info);
+ * @endcode
+ *
+ *
+ * @subsection readunknown_usage Reading any ambix files
+ *
+ * If you do not specify the format prior to opening, you can query the format of the file
+ * from the ambix_info_t struct.
+ *
+ * @code
+   ambix_t*ambix = NULL;
+   ambix_info_t*info  = calloc(1, sizeof(ambix_info_t)); /* initialize the format field (among others) to 0 */
+
+   ambix = ambix_open("ambixfile.caf", AMBIX_READ, info);
+
+   if(ambix) {
+     switch(ambix->fileformat) {
+     case(AMBIX_BASIC):
+       printf("this file is ambix basic\n");
+       break;
+     case(AMBIX_EXTENDED):
+       printf("this file is ambix extended\n");
+       break;
+     case(AMBIX_NONE):
+       printf("this file is not an ambix file\n");
+       break;
+     default:
+       printf("this file is of unknown format...\n");
+     }
+
+     ambix_close(ambix);
+   }
+   free(info);
+ * @endcode
+ *
+ *
+ * @section write_usage Writing ambix files
+ *
+ * To write data to an ambix file, you have to open it with the @ref AMBIX_WRITE
+ * flag. You also need to specify some global properties of the output data,
+ * namely the samplerate and the sampleformat, as well as the number of
+ * ambisonics channels and the number of extra channels that are physically
+ * stored on the disk.
+ *
+ * @subsection writebasic_usage Writing BASIC ambix files
+ *
+ * You can write "BASIC" ambix files by setting the 'fileformat' member of the
+ * ambix_info_t struct to @ref AMBIX_BASIC prior to opening the file.
+ *
+ * You will need to provide a full set of ambisonics channels when writing data
+ * to the file, and must not set an adaptor matrix (see also @ref writebasic2extended_usage).
+ * A full set of ambisonics must always satisfy the formula
+ * @f$channels=(order_{ambi}+1)^2@f$.
+ *
+ * You cannot write extra audio channels into a "BASIC" ambix file.
+ *
+ * @code
+   ambix_t*ambix = NULL;
+   ambix_info_t*info  = calloc(1, sizeof(ambix_info_t));
+
+   /* need to specify samplerate and sampleformat */
+   ambix->samplerate = 44100;
+   ambix->sampleformat = AMBIX_SAMPLEFORMAT_PCM24;
+   ambix->fileformat = AMBIX_BASIC;
+   ambix->ambichannels = 16; /* 16 channels means 3rd order ambisonics, according to L=(2N+1)^2 */
+
+   ambix = ambix_open("ambixfile.caf", AMBIX_WRITE, info);
+   if(ambix) {
+     uint64_t frames = info->frames;
+     uint64_t blocksize = 1024;
+     uint64_t block;
+
+     float32_t*ambidata  = calloc(info->ambichannels  * blocksize, sizeof(float32_t));
+
+     while(haveData) {
+       // acquire blocksize samples of a full set of 3rd order ambisonics data (16 channels)
+       // into ambidata (interleaved)
+       // ...
+
+       block = ambix_writef_float32(ambix, ambidata, NULL, blocksize);
+     }
+
+     ambix_close(ambix);
+     free(ambidata);
+   }
+   free(info);
+ * @endcode
+ *
+ * @subsection writeextended_usage Writing EXTENDED ambix files
+ *
+ * You can write "EXTENDED" ambix files by setting the 'fileformat' member of
+ * the ambix_info_t struct to @ref AMBIX_EXTENDED prior to opening the file.
+ *
+ * You MUST set an adaptormatrix (to convert the reduced set to a full
+ * ambisonics set) using ambix_set_adaptormatrix(). It gets written to disk
+ * prior to writing any samples to the file (or closing the ambix file). It is
+ * an error to call ambix_set_adaptormatrix() after starting to write samples.
+ *
+ * @code
+   ambix_t*ambix = NULL;
+   ambix_info_t*info  = calloc(1, sizeof(ambix_info_t));
+
+   /* need to specify samplerate and sampleformat */
+   ambix->samplerate = 44100;
+   ambix->sampleformat = AMBIX_SAMPLEFORMAT_PCM24;
+   ambix->fileformat = AMBIX_EXTENDED;
+   ambix->ambichannels = 8;  /* a reduced ambisonics set */
+   ambix->extrachannels = 1; /* an extrachannel, e.g. click-track */
+
+   ambix = ambix_open("ambixfile.caf", AMBIX_WRITE, info);
+   if(ambix) {
+     uint64_t frames = info->frames;
+     uint64_t blocksize = 1024;
+     uint64_t block;
+
+     float32_t*ambidata  = calloc(info->ambichannels  * blocksize, sizeof(float32_t));
+     float32_t*extradata = calloc(info->extrachannels  * blocksize, sizeof(float32_t));
+
+     /* create an adaptormatrix: */
+     ambix_matrix_t adaptormatrix = {0, 0, NULL};
+     ambix_matrix_init(16, 8, &adaptormatrix);
+     // fill the adaptormatrix, that expands our 8 channels to a full 3D 3rd-order set (16 channels)
+     // ...
+
+     ambix_set_adapatormatrix(ambix, &adaptormatrix);
+     ambix_write_header(ambix);
+
+     while(haveData) {
+       // acquire blocksize samples of a full set of reduced ambisonics data (8 channels)
+       // into ambidata (interleaved), and a some (1) extra channels
+       // ...
+
+       block = ambix_writef_float32(ambix, ambidata, extradata, blocksize);
+     }
+
+     ambix_close(ambix);
+     ambix_matrix_deinit(&adaptormatrix);
+     free(ambidata);
+     free(extradata);
+   }
+   free(info);
+ * @endcode
+ *
+ * @subsection writebasic2extended_usage Writing EXTENDED ambix files using the BASIC interface
+ *
+ * Finally, you can create "EXTENDED" ambix files from a full set of ambisonics channels and an
+ * adaptor matrix.
+ * This can be useful if you have a setup that works with full ambisonics sets (e.g. a DAW project)
+ * and you want to create a size-optimized ambix file that only stores a reduced set.
+ *
+ * This can be achieved by setting the 'fileformat' member of the ambix_info_t struct to
+ * @ref AMBIX_BASIC (because you will provide the full ambisonics set as if the file were opened in
+ * "BASIC" mode) and the 'ambichannels' member to the (reduced) number of ambisonics channel as will
+ * be written to the disk, and then setting an adaptor matrix ambix_set_adaptormatrix(), that will
+ * convert the reduced set back to the full set.
+ * libambix will internally reduce the full ambisonics set (as passed to @ref ambix_writef) using
+ * the (pseudo) inverse of the adaptor-matrix.
+ *
+ * @note You must ensure yourself that the adaptor matrix is inversible.
+ *
+ * The adaptor matrix gets written to disk prior to writing any samples to the file
+ * (or closing the ambix file). It is an error to call ambix_set_adaptormatrix()
+ * after starting to write samples.
+ *
+ * @note If you pass an adaptor matrix that expands a reduced set to full ambisonics
+ * (e.g. converting from 1st order horizontal-only ambisonics set to a 2nd order fully periphonic set)
+ * the reconstructed ambisonics channels (when reading the ambix file later),
+ * might be different from the ambisonics channels you passed in when writing the file
+ * (e.g. channels that contain 3rd-order and/or Z-axis components will be muted).
+ *
+ * @code
+   ambix_t*ambix = NULL;
+   ambix_info_t*info  = calloc(1, sizeof(ambix_info_t));
+
+   /* need to specify samplerate and sampleformat */
+   info->samplerate   = 44100;
+   info->sampleformat = AMBIX_SAMPLEFORMAT_PCM24;
+   info->fileformat   = AMBIX_BASIC;
+   info->ambichannels = 7; /* 3rd-order horizontal-only(!) */
+
+   ambix = ambix_open("ambixfile.caf", AMBIX_WRITE, info);
+   if(ambix) {
+     uint64_t fullambichannels = 16;
+     uint64_t frames = info->frames;
+     uint64_t blocksize = 1024;
+     uint64_t block;
+
+     float32_t*ambidata  = calloc(fullambichannels  * blocksize, sizeof(float32_t));
+
+     /* on disk, the data is stored as 3rd-order horizontal-only Furse-Malham
+      * set (7 channels); we need to provide an adaptor matrix that converts
+      * from the 7 FuMa-channels to the 16 AMBIX channels
+      */
+     ambix_matrix_t*mtx = NULL;
+     mtx = ambix_matrix_init(fullambichannels, info->ambichannels, mtx);
+     mtx = ambix_matrix_fill(mtx, ABIX_MATRIX_FUMA); /* fuma->ambix matrix [16x7] */
+     ambix_set_adaptormatrix(ambix, mtx);
+     ambix_matrix_destroy(mtx);
+
+     while(haveData) {
+       // acquire blocksize samples of a full set of 3rd order ambisonics data (16 channels)
+       //  into ambidata (interleaved)
+       // ...
+
+       block = ambix_write_float32(ambix, ambidata, NULL, blocksize);
+     }
+
+     ambix_close(ambix);
+     free(ambidata);
+   }
+   free(info);
+ * @endcode
+ *
+ */
+
+/**
+ * @page format The ambix format
+ *
+ * The ambisonics channel layout for ambix-files is @link format_norm SN3D@endlink/@link format_acn ACN @endlink (3D, seminormalized, <em>Ambisonic Channel Numbers</em>),
+ * henceforth called "standard layout".
+ *
+ * Files in @ref AMBIX_BASIC format always store the data in the standard layout.
+ * Files in @ref AMBIX_EXTENDED format can store the data in any layout they prefer,
+ * but have to provide an adapator matrix @f$M@f$ that can be used to convert the
+ * channels layout stored within the file to the standard layout, according to
+ * the formula @f$\vec{b}_{standardlayout}=M_{adaptor}*\vec{b}_{filelayout}@f$.
+ *
+ * E.g. if the channels are stored in the traditional @em B-format (3D),
+ * the following adaptor matrix has to be used:
+ *
+ * @f$M_{B\rightarrow ambix}=\begin{pmatrix}\sqrt{2}&0&0&0\\0&0&0&-1\\0&1&0&0\\0&0&-1&0\end{pmatrix}@f$
+ *
+ * @section format_bugfix Bug-fixes for the format-specification
+ *
+ * The original <a href="http://ambisonics.iem.at/xchange/fileformat/2011_nachbarzottersontacchideleflie_ambix.pdf">format proposal</a>
+ * had a number of flaws and bugs that have been discovered during the implenentation of @em libambix.
+ * Consequently, these flaws and bugs have been fixed.
+ *
+ * @subsection format_bugfix_UUID UUID-chunk
+ *
+ * The original format proposal defined a UUID @b 49454d2e-4154-2f41-4d42-49582f584d4c,
+ * which is equivalent to the literal "IEM.AT/AMBIX/XML" (the UUID is an ASCII-representation of this string).
+ * Unfortunately this does not take into account, that while UUIDs can be @e random,
+ * certain bits are reserved (e.g. indicating the UUID variant).
+ * The originally suggested UUID is - according to it's reserved bits - a v2 variant (DCE Security),
+ * though in reality it is not. This makes name clashes probable and counteracts the idea of using UUIDs.
+ * This UUID should therefore be deprecated.
+ *
+ * Therefore, it is suggested to use URL based UUID of the v5 variant (SHA-1 based), with the URLs following the scheme
+ *   http://ambisonics.iem.at/xchange/format/1.0 ,
+ * where the last element of the URL denotes the ambix specification version the given chunk adheres to.
+ * This allows for easy and consistent adding of new UUIDs, if the format ever needs to be extended.
+ *
+ * The URL http://ambisonics.iem.at/xchange/format/1.0 translates to the UUID @b 1ad318c3-00e5-5576-be2d-0dca2460bc89.
+ *
+ * For compatibility reasons, libambix will be able to read both the original (deprecated) and the new UUID.
+ * However, it will only write the new UUID to newly created ambix files.
+ *
+ * @subsection format_bugfix_sampletypes Valid sample types
+ *
+ * The original format proposal enumerates the valid sample (audio data) types, as int16, int24, int32 and float32.
+ * This seems to be an unnecessary restriction on the CAF-format.
+ * All sample types valid in CAF-files should be valid in ambix files as well.
+ *
+ * @subsection format_bugfix_rowcols Type of rows & columns in the adaptor matrix
+ *
+ * The original format proposal shows the adaptor matrix as a linear array of float32 values, with the first element
+ * being the number of rows in the matrix and the second element being the number of columns. The remaining values form the
+ * actual matrix data in the order a[0,0], a[0,1]...a[L,C].
+ * Since both rows and columns can only be positive integer values, this has been changed, so the first two values are of the type int32.
+ *
+ * @subsection format_bugfix_extrachannels Extra (non-ambisonics) channels
+ *
+ * The original format proposal speaks only of full ambisonics sets (in the case of the "BASIC" format, all audio channels
+ * in the CAF-file must form exactly a full ambisonics set; in the case of the "EXTENDED" format, all audio channels in the
+ * CAF-file multiplied by the adaptor matrix must form a full ambisonics set).
+ * When implementing libambix, this was interpreted to allow room for "extra" (non-ambisonics) channels in the "EXTENDED" format:
+ * If a file holds (C+X) audio channels (with both C and X being positive integers),
+ * the first C channels are converted into a full ambisonics set by multiplying it with the [L*C] adaptor matrix.
+ * The remaining X channels are provided "as-is", and can be used to store extra data (like click-tracks,...)
+ *
+ * @section format_glossary Format Glossary
+ * @subsection format_norm Normalisation
+ *
+ * There are a number of different ways how to @em normalize the Ambisonics channels
+ * (that is: how they are weighted relative to each other).
+ * The default layout assumes <em>Schmidt semi-normalized</em> spherical harmonics.
+ *
+ * @subsection format_acn Ambisonics Channel Number
+ * The channel ordering is standardized using the following formula
+ * (with @f$l@f$ being the @em degree and @f$m@f$ being the @em order of the spherical harmonic).
+ *
+ * @f$ACN = l * ( l + 1 ) + m@f$
+ *
+ */
+
+/**
+ * @cond
+ * @page utilities ambix commandline utilities
+ *
+ * libambix comes with a number of commandline utilities
+ *
+ * @section informational informational
+ * @subsection ambix-info ambix-info
+ * @subsection ambix-dump ambix-dump
+ * @section ambix-refile file creation
+ * @subsection ambix-interleave ambix-interleave
+ * @subsection ambix-deinterleave ambix-deinterleave
+ * @section recording and playback
+ * @subsection ambix-jplay ambix-jplay
+ * @subsection ambix-jrecord ambix-jrecord
+ * @section tests
+ * @subsection ambix-test ambix-test
+ * @subsection ambix-matrix ambix-matrix
+ * @endcond
+ */
+
+
+/**
+ * @page FAQ Frequently Asked Questions
+ *
+ * @section Terms
+ *
+ * @subsection term-ambix What does libambix stand for?
+ * @c libambix is a <b>lib</b>rary for reading and writing <b>ambi</b>sonics e<b>x</b>change files.
+ *
+ * @subsection basic-vs-extended What is the difference between BASIC and EXTENDED ambix files?
+ * @c BASIC ambix files contain exactly a full set of periphonic ambisonics channels,
+ * using ACN channel ordering and SN3D normalisation.
+ *
+ * @c EXTENDED ambix files contain an additional adaptor matrix at the beginning of the file,
+ * which can be used to turn the actually stored audio channels into a full set of
+ * periphonic ambisonics channels (periphonic, ACN, SN3D).
+ * These files can be used to store a reduced number of channels
+ * (e.g. when your soundfield is horizontal only,
+ * there is no need to store the channels with height-information, as they will be muted anyhow),
+ * while providing a simple and standardized way to play them back on a full ambisonics decoder.
+ *
+ * See @ref format for more information.
+ *
+ * @section HOW-TOs
+ *
+ * @subsection howto-channels2basic How can I create an ambix file from a set of mono soundfiles?
+ * If you have an ambisonics recording as multiple mono soundfiles following the ambix standard
+ * (channel ordering: ACN, normalisation: SN3D), you can merge them into an ambix files
+ * using the `ambix-interleave` command.
+ * @code
+ ambix-interleave -o ambixfile.caf recording-ambi0.wav recording-ambi1.wav recording-ambi2.wav recording-ambi3.wav
+ * @endcode
+ *
+ * @subsection howto-multichannel2basic How can I create an ambix file from a multichannel soundfile?
+ * If you have an ambisonics recording already as a multichannel soundfile, with the channels
+ * following the ambix standard (channel ordering: ACN, normalisation: SN3D),
+ * you can create an ambix file from that using the `ambix-interleave` command.
+ * @code
+ ambix-interleave -o ambixfile.caf recording.wav
+ * @endcode
+ *
+ * @subsection howto-amb2extended How can I convert my .amb files to ambix?
+ * You can use the `ambix-interleave` file to create EXTENDED ambix files from your
+ * old .amb recordings.
+ * If `ambix-interleave` detects that the input is an .amb file, it will
+ * add an adaptor matrix that converts from .amb's Furse-Malham channels to ambix channels,
+ * and will otherwise leave the audio data intact.
+ * @code
+ ambix-interleave -o ambixfile.caf recording.amb
+ * @endcode
+ *
+ * @subsection howto-amb2basic How can I convert my .amb files to ambix?
+ * To create BASIC ambix files (without an adaptor matrix), you can use
+ * `ambix-deinterleave` to convert the .amb file to SN3D/ACN channels, and then
+ * use `ambix-interleave` to merge those files into a single ambix file:
+ * @code
+ ambix-deinterleave recording.amb
+ ambix-interleave -o ambixfile.caf recording-ambi*
+ * @endcode
+ *
+ * @subsection howto-extended2basic How can I convert an EXTENDED ambix file to BASIC?
+ * The easiest way to convert an EXTENDED ambix file to a BASIC file is to first
+ * extract the channels into separate files using `ambix-deinterleave`,
+ * and then merge them back using `ambix-interleave`:
+ * @code
+ ambix-deinterleave ambixextended.caf
+ ambix-interleave -o ambixbasic.caf ambixextended-ambi*
+ * @endcode
+ *
+ */
